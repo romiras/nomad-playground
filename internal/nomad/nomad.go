@@ -11,6 +11,38 @@ type NomadService struct {
 	region string
 }
 
+type (
+	NomadJob struct {
+		ID         string
+		Name       string
+		Datacenter string
+		Region     string
+		Priority   int
+		TaskGroups []*NomadTaskGroup
+	}
+
+	NomadTaskGroup struct {
+		Name  string
+		Tasks []NomadTask
+	}
+
+	NomadTask struct {
+		Name      string
+		Driver    string
+		Config    map[string]interface{}
+		EnvVars   map[string]string
+		Resources *NomadTaskResources
+	}
+
+	NomadTaskResources struct {
+		CPU         *int
+		Cores       *int
+		MemoryMB    *int
+		MemoryMaxMB *int
+		DiskMB      *int
+	}
+)
+
 const (
 	DefaultPriority = 50
 )
@@ -35,37 +67,26 @@ func NewNomad(region string) *NomadService {
 	}
 }
 
-func (n *NomadService) Prepare(jobID, jobName string, priority int) (*api.Job, error) {
-	if priority == 0 {
-		priority = DefaultPriority
+func (n *NomadService) Prepare(nomadJob *NomadJob) (*api.Job, error) {
+	if nomadJob == nil {
+		return nil, fmt.Errorf("nomadJob is nil")
 	}
-	job := api.NewServiceJob(jobID, jobName, n.region, priority)
-	job.AddDatacenter("dc1")
 
-	tasks := []*api.Task{
-		n.createTask("redis6-A", "docker", nil, map[string]interface{}{
-			"image": "redis:6-alpine",
-			"ports": []string{"p-redis"},
-		}),
-		n.createTask("random-logger", "docker", nil, map[string]interface{}{
-			"image": "chentex/random-logger:latest",
-			"args": []string{
-				"100", "400",
-			},
-		}),
-		/*
-			n.createTask("some-task-A", "docker", nil, map[string]interface{}{
-				"image": "",
-				"command": "",
-				"entrypoint": []string{},
-				"args": []string{}, // https://www.nomadproject.io/docs/runtime/interpolation
-			}),
-		*/
+	if nomadJob.Priority == 0 {
+		nomadJob.Priority = DefaultPriority
 	}
-	taskGroup := n.createTaskGroup("task-group-name1", tasks)
+	job := api.NewServiceJob(nomadJob.ID, nomadJob.Name, nomadJob.Region, nomadJob.Priority)
+	job.AddDatacenter(nomadJob.Datacenter)
 
-	taskGroup.Canonicalize(job)
-	job.AddTaskGroup(taskGroup)
+	for _, tg := range nomadJob.TaskGroups {
+		tasks := make([]*api.Task, 0, len(tg.Tasks))
+		for _, nomadTask := range tg.Tasks {
+			tasks = append(tasks, n.createTask(&nomadTask))
+		}
+		taskGroup := n.createTaskGroup(tg.Name, tasks)
+		taskGroup.Canonicalize(job)
+		job.AddTaskGroup(taskGroup)
+	}
 
 	if len(job.TaskGroups) == 0 {
 		panic("no task groups")
@@ -140,13 +161,34 @@ func (n *NomadService) createTaskGroup(taskGroupName string, tasks []*api.Task) 
 	return taskGroup
 }
 
-func (n *NomadService) createTask(taskName, taskDriver string, envVars map[string]string, config map[string]interface{}) *api.Task {
-	task := api.NewTask(taskName, taskDriver)
-	task.Env = envVars
-	task.Config = config
-	task.Require(&api.Resources{
-		CPU:      intToPtr(100),
-		MemoryMB: intToPtr(256),
-	})
+func (n *NomadService) createTask(nomadTask *NomadTask) *api.Task {
+	task := api.NewTask(nomadTask.Name, nomadTask.Driver)
+	task.Env = nomadTask.EnvVars
+	task.Config = nomadTask.Config
+	if nomadTask.Resources != nil {
+		res := api.Resources{}
+		if nomadTask.Resources.CPU != nil {
+			res.CPU = intToPtr(*nomadTask.Resources.CPU)
+		}
+		if nomadTask.Resources.Cores != nil {
+			res.Cores = intToPtr(*nomadTask.Resources.Cores)
+		}
+		if nomadTask.Resources.MemoryMB != nil {
+			res.MemoryMB = intToPtr(*nomadTask.Resources.MemoryMB)
+		}
+		if nomadTask.Resources.MemoryMaxMB != nil {
+			res.MemoryMaxMB = intToPtr(*nomadTask.Resources.MemoryMaxMB)
+		}
+		if nomadTask.Resources.DiskMB != nil {
+			res.DiskMB = intToPtr(*nomadTask.Resources.DiskMB)
+		}
+		task.Require(&res)
+	} else {
+		task.Require(&api.Resources{
+			CPU:      intToPtr(100),
+			MemoryMB: intToPtr(256),
+		})
+	}
+
 	return task
 }
