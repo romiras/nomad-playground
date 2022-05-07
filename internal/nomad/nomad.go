@@ -43,15 +43,28 @@ func (n *NomadService) Prepare(jobID, jobName string, priority int) (*api.Job, e
 	job.AddDatacenter("dc1")
 
 	tasks := []*api.Task{
+		n.createTask("redis6-A", "docker", nil, map[string]interface{}{
+			"image": "redis:6-alpine",
+			"ports": []string{"p-redis"},
+		}),
 		n.createTask("random-logger", "docker", nil, map[string]interface{}{
 			"image": "chentex/random-logger:latest",
 			"args": []string{
 				"100", "400",
 			},
 		}),
+		/*
+			n.createTask("some-task-A", "docker", nil, map[string]interface{}{
+				"image": "",
+				"command": "",
+				"entrypoint": []string{},
+				"args": []string{}, // https://www.nomadproject.io/docs/runtime/interpolation
+			}),
+		*/
 	}
-	taskGroup := n.createTaskGroup("task-group-name", tasks)
+	taskGroup := n.createTaskGroup("task-group-name1", tasks)
 
+	taskGroup.Canonicalize(job)
 	job.AddTaskGroup(taskGroup)
 
 	if len(job.TaskGroups) == 0 {
@@ -112,6 +125,13 @@ func (n *NomadService) Deregister(jobID string, purge bool) error {
 
 func (n *NomadService) createTaskGroup(taskGroupName string, tasks []*api.Task) *api.TaskGroup {
 	taskGroup := api.NewTaskGroup(taskGroupName, 1)
+	taskGroup.Networks = []*api.NetworkResource{
+		{
+			DynamicPorts: []api.Port{
+				{Label: "p-redis", Value: 0, To: 6379},
+			},
+		},
+	}
 
 	for _, task := range tasks {
 		taskGroup.AddTask(task)
